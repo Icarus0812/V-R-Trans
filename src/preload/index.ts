@@ -1,22 +1,28 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-// Custom APIs for renderer
-const api = {}
+const whisperApi = {
+  /**
+   * 오디오 ArrayBuffer를 메인 프로세스로 보내서 전사 요청
+   */
+  transcribeBuffer: async (arrayBuffer: ArrayBuffer) => {
+    return await ipcRenderer.invoke('whisper:transcribe-buffer', arrayBuffer)
+  }
+}
 
-// Use `contextBridge` APIs to expose Electron APIs to
-// renderer only if context isolation is enabled, otherwise
-// just add to the DOM global.
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
-    contextBridge.exposeInMainWorld('api', api)
+    contextBridge.exposeInMainWorld('whisperApi', whisperApi)
   } catch (error) {
-    console.error(error)
+    console.error('[preload expose error]', error)
   }
 } else {
-  // @ts-ignore (define in dts)
-  window.electron = electronAPI
-  // @ts-ignore (define in dts)
-  window.api = api
+  // contextIsolation이 꺼진 경우 fallback
+  ;(window as typeof window & { electron: typeof electronAPI }).electron = electronAPI
+  ;(
+    window as typeof window & {
+      whisperApi: typeof whisperApi
+    }
+  ).whisperApi = whisperApi
 }

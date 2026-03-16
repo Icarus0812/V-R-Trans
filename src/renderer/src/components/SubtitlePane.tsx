@@ -41,6 +41,7 @@ function SubtitlePane({
         </div>
         <div className="subtitle-live-translated">
           {partialTranslated || '번역 자막 대기 중'}
+
         </div>
       </div>
 
