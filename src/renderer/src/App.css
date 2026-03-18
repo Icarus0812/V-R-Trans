@@ -25,29 +25,33 @@ body {
 }
 
 .topbar-trigger {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: 18px;
-  z-index: 40;
+  height: 14px;
+  z-index: 10;
 }
 
 .topbar-shell {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  z-index: 50;
-  padding: 6px;
-}
-
-.topbar-shell.closed {
+  z-index: 20;
   pointer-events: none;
+  transform: translateY(-110%);
+  transition: transform 0.2s ease;
 }
 
 .topbar-shell.open {
+  transform: translateY(0);
   pointer-events: auto;
+}
+
+.topbar-shell.closed {
+  transform: translateY(-110%);
+  pointer-events: none;
 }
 
 .topbar {

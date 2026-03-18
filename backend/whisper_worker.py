@@ -1,103 +1,124 @@
-from __future__ import annotations
-
 import json
 import sys
-from pathlib import Path
-from typing import Any
+import traceback
+from typing import Any, Dict
 
 from faster_whisper import WhisperModel
 
-MODEL_NAME = "small"
-LANGUAGE = "ko"
-
-model = WhisperModel(
-    MODEL_NAME,
-    device="cpu",
-    compute_type="int8",
-)
-
-print(json.dumps({"type": "ready", "model": MODEL_NAME}, ensure_ascii=False), flush=True)
+# Windows 콘솔/파이프에서 UTF-8 출력 강제
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 
-def transcribe_file(audio_path: str) -> dict[str, Any]:
-    path = Path(audio_path)
-    if not path.exists():
-      return {
-          "ok": False,
-          "error": f"file not found: {audio_path}",
-      }
-
-    segments, info = model.transcribe(
-        str(path),
-        language=LANGUAGE,
-        vad_filter=True,
-        beam_size=5,
-    )
-
-    items: list[dict[str, Any]] = []
-    parts: list[str] = []
-
-    for segment in segments:
-        text = segment.text.strip()
-        items.append(
-            {
-                "start": round(segment.start, 2),
-                "end": round(segment.end, 2),
-                "text": text,
-            }
-        )
-        if text:
-            parts.append(text)
-
-    return {
-        "ok": True,
-        "detected_language": info.language,
-        "language_probability": float(info.language_probability),
-        "segments": items,
-        "full_text": " ".join(parts).strip(),
-    }
+def send_json(payload: Dict[str, Any]) -> None:
+    """
+    한 줄 JSON으로 stdout에 응답을 보낸다.
+    ensure_ascii=False 로 한글이 깨지지 않게 한다.
+    """
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
 
 
-for raw_line in sys.stdin:
-    line = raw_line.strip()
-    if not line:
-        continue
+def main() -> None:
+    """
+    faster-whisper 모델 로드 후,
+    stdin으로 들어오는 JSON 명령을 처리한다.
+    """
+    model = WhisperModel("small", device="cpu", compute_type="int8")
 
-    try:
+    # worker 준비 완료 알림
+    send_json({
+        "type": "ready",
+        "model": "small"
+    })
+
+    for raw_line in sys.stdin:
+      try:
+        line = raw_line.strip()
+        if not line:
+            continue
+
         payload = json.loads(line)
-        request_id = payload.get("id")
+
         command = payload.get("command")
+        request_id = payload.get("id")
 
-        if command == "transcribe":
-            audio_path = payload.get("audio_path", "")
-            result = transcribe_file(audio_path)
-            result["id"] = request_id
-            print(json.dumps(result, ensure_ascii=False), flush=True)
+        if command == "ping":
+            send_json({
+                "id": request_id,
+                "pong": True
+            })
+            continue
 
-        elif command == "ping":
-            print(json.dumps({"id": request_id, "ok": True, "pong": True}, ensure_ascii=False), flush=True)
+        if command != "transcribe":
+            send_json({
+                "id": request_id,
+                "ok": False,
+                "error": f"Unknown command: {command}"
+            })
+            continue
 
-        else:
-            print(
-                json.dumps(
-                    {
-                        "id": request_id,
-                        "ok": False,
-                        "error": f"unknown command: {command}",
-                    },
-                    ensure_ascii=False,
-                ),
-                flush=True,
-            )
+        audio_path = payload.get("audio_path")
+        input_language = payload.get("input_language")
 
-    except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                },
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
+        if not audio_path:
+            send_json({
+                "id": request_id,
+                "ok": False,
+                "error": "audio_path is required"
+            })
+            continue
+
+        # auto 또는 빈 값이면 자동 감지
+        transcribe_kwargs: Dict[str, Any] = {
+            "beam_size": 1,
+            "vad_filter": False
+        }
+
+        if input_language:
+            transcribe_kwargs["language"] = input_language
+
+        segments, info = model.transcribe(audio_path, **transcribe_kwargs)
+
+        segment_list = []
+        full_text_parts = []
+
+        for segment in segments:
+            text = segment.text.strip()
+
+            segment_list.append({
+                "start": segment.start,
+                "end": segment.end,
+                "text": text
+            })
+
+            if text:
+                full_text_parts.append(text)
+
+        full_text = " ".join(full_text_parts).strip()
+
+        send_json({
+            "id": request_id,
+            "ok": True,
+            "text": full_text,
+            "full_text": full_text,
+            "segments": segment_list,
+            "detected_language": getattr(info, "language", None),
+            "language_probability": getattr(info, "language_probability", None)
+        })
+
+      except Exception as error:
+        send_json({
+            "id": payload.get("id") if "payload" in locals() and isinstance(payload, dict) else None,
+            "ok": False,
+            "error": str(error)
+        })
+
+        traceback.print_exc(file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

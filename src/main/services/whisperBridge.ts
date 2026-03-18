@@ -60,7 +60,10 @@ class WhisperBridge {
     return foundPath
   }
 
-  start(): void {
+  /**
+   * Python worker 시작
+   */
+  async start(): Promise<void> {
     // 이미 실행 중이면 중복 실행 방지
     if (this.proc) return
 
@@ -70,10 +73,14 @@ class WhisperBridge {
     console.log('[whisper] cwd =', process.cwd())
     console.log('[whisper] appPath =', app.getAppPath())
 
-    // python으로 worker 실행
-    this.proc = spawn('python', [workerPath], {
+        this.proc = spawn('python', [workerPath], {
       cwd: workerDir,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1'
+      }
     })
 
     this.proc.on('error', (error: Error): void => {
@@ -90,6 +97,7 @@ class WhisperBridge {
 
         const message = JSON.parse(line) as WhisperResponse
 
+        // worker 준비 완료
         if (message.type === 'ready') {
           this.ready = true
           console.log('[whisper] ready:', message.model)
@@ -129,7 +137,10 @@ class WhisperBridge {
     })
   }
 
-  stop(): void {
+  /**
+   * Python worker 종료
+   */
+  async stop(): Promise<void> {
     if (!this.proc) return
 
     this.proc.kill()
@@ -137,11 +148,19 @@ class WhisperBridge {
     this.ready = false
   }
 
+  /**
+   * worker 준비 여부
+   */
   isReady(): boolean {
     return this.ready
   }
 
-  async transcribeFile(audioPath: string): Promise<WhisperResponse> {
+  /**
+   * 오디오 파일 전사 요청
+   * @param audioPath 전사할 오디오 파일 경로
+   * @param inputLanguage 입력 언어 (auto, ja, en, ko ...)
+   */
+  async transcribeFile(audioPath: string, inputLanguage: string): Promise<WhisperResponse> {
     if (!this.proc) {
       throw new Error('Whisper worker is not running')
     }
@@ -152,10 +171,15 @@ class WhisperBridge {
 
     const id = `req_${Date.now()}_${this.requestSeq++}`
 
+    // auto면 자동 감지 사용
+    const normalizedLanguage =
+      inputLanguage && inputLanguage !== 'auto' ? inputLanguage : undefined
+
     const payload = {
       id,
       command: 'transcribe',
-      audio_path: audioPath
+      audio_path: audioPath,
+      input_language: normalizedLanguage
     }
 
     const promise = new Promise<WhisperResponse>((resolve, reject) => {
