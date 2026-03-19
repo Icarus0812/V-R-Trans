@@ -1,32 +1,49 @@
 import type { JSX, ChangeEvent } from 'react'
 
+// Whisper 모델 옵션
+const WHISPER_MODEL_OPTIONS = [
+  'tiny',
+  'base',
+  'small',
+  'medium',
+  'large-v1',
+  'large-v2',
+  'large-v3',
+  'distil-large-v3'
+] as const
+
+// 번역 모델 옵션 (NLLB)
+const TRANSLATION_MODEL_OPTIONS = [
+  { label: 'NLLB 600M (빠름)', value: 'facebook/nllb-200-distilled-600M' },
+  { label: 'NLLB 1.3B (균형)', value: 'facebook/nllb-200-distilled-1.3B' },
+  { label: 'NLLB 3.3B (고품질)', value: 'facebook/nllb-200-3.3B' }
+] as const
+
 interface TopBarProps {
-  // 유튜브 URL 입력값
   url: string
-
-  // 입력 언어: Whisper가 어떤 언어로 인식할지
   inputLanguage: string
-
-  // 출력 언어: 번역 결과를 어떤 언어로 보여줄지
   outputLanguage: string
-
-  // 채팅 표시 여부
   isChatVisible: boolean
-
-  // URL 변경 핸들러
+  whisperModel: string
+  translationModel: string
   onUrlChange: (value: string) => void
-
-  // 입력 언어 변경 핸들러
   onInputLanguageChange: (value: string) => void
-
-  // 출력 언어 변경 핸들러
   onOutputLanguageChange: (value: string) => void
-
-  // URL 로드
+  onWhisperModelChange: (value: string) => void
+  onTranslationModelChange: (value: string) => void
   onLoad: () => void
-
-  // 채팅 토글
   onToggleChat: () => void
+}
+
+// select 공통 스타일
+const selectStyle: React.CSSProperties = {
+  height: '36px',
+  padding: '0 10px',
+  border: '1px solid #333',
+  borderRadius: '8px',
+  backgroundColor: '#1a1a1a',
+  color: '#fff',
+  fontSize: '13px'
 }
 
 function TopBar({
@@ -34,40 +51,22 @@ function TopBar({
   inputLanguage,
   outputLanguage,
   isChatVisible,
+  whisperModel,
+  translationModel,
   onUrlChange,
   onInputLanguageChange,
   onOutputLanguageChange,
+  onWhisperModelChange,
+  onTranslationModelChange,
   onLoad,
   onToggleChat
 }: TopBarProps): JSX.Element {
-  /**
-   * URL 입력 변경
-   */
-  const handleUrlChange = (event: ChangeEvent<HTMLInputElement>): void => {
-    onUrlChange(event.target.value)
+  const handleUrlChange = (e: ChangeEvent<HTMLInputElement>): void => {
+    onUrlChange(e.target.value)
   }
 
-  /**
-   * 입력 언어 선택 변경
-   */
-  const handleInputLanguageChange = (event: ChangeEvent<HTMLSelectElement>): void => {
-    onInputLanguageChange(event.target.value)
-  }
-
-  /**
-   * 출력 언어 선택 변경
-   */
-  const handleOutputLanguageChange = (event: ChangeEvent<HTMLSelectElement>): void => {
-    onOutputLanguageChange(event.target.value)
-  }
-
-  /**
-   * 엔터 누르면 영상 로드
-   */
-  const handleUrlKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'Enter') {
-      onLoad()
-    }
+  const handleUrlKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') onLoad()
   }
 
   return (
@@ -75,6 +74,7 @@ function TopBar({
       style={{
         display: 'flex',
         alignItems: 'center',
+        flexWrap: 'wrap',
         gap: '8px',
         padding: '10px 12px',
         backgroundColor: '#111',
@@ -90,29 +90,23 @@ function TopBar({
         placeholder="유튜브 URL 입력"
         style={{
           flex: 1,
-          minWidth: '260px',
+          minWidth: '200px',
           height: '36px',
           padding: '0 10px',
           border: '1px solid #333',
           borderRadius: '8px',
           backgroundColor: '#1a1a1a',
           color: '#fff',
-          outline: 'none'
+          outline: 'none',
+          fontSize: '13px'
         }}
       />
 
-      {/* 입력 언어 선택 */}
+      {/* 입력 언어 */}
       <select
         value={inputLanguage}
-        onChange={handleInputLanguageChange}
-        style={{
-          height: '36px',
-          padding: '0 10px',
-          border: '1px solid #333',
-          borderRadius: '8px',
-          backgroundColor: '#1a1a1a',
-          color: '#fff'
-        }}
+        onChange={(e) => onInputLanguageChange(e.target.value)}
+        style={selectStyle}
       >
         <option value="auto">입력: 자동 감지</option>
         <option value="ja">입력: 일본어</option>
@@ -120,25 +114,44 @@ function TopBar({
         <option value="ko">입력: 한국어</option>
       </select>
 
-      {/* 출력 언어 선택 */}
+      {/* 출력 언어 */}
       <select
         value={outputLanguage}
-        onChange={handleOutputLanguageChange}
-        style={{
-          height: '36px',
-          padding: '0 10px',
-          border: '1px solid #333',
-          borderRadius: '8px',
-          backgroundColor: '#1a1a1a',
-          color: '#fff'
-        }}
+        onChange={(e) => onOutputLanguageChange(e.target.value)}
+        style={selectStyle}
       >
         <option value="ko">출력: 한국어</option>
         <option value="ja">출력: 일본어</option>
         <option value="en">출력: 영어</option>
       </select>
 
-      {/* 영상 로드 버튼 */}
+      {/* Whisper 모델 */}
+      <select
+        value={whisperModel}
+        onChange={(e) => onWhisperModelChange(e.target.value)}
+        style={selectStyle}
+      >
+        {WHISPER_MODEL_OPTIONS.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+      </select>
+
+      {/* 번역 모델 */}
+      <select
+        value={translationModel}
+        onChange={(e) => onTranslationModelChange(e.target.value)}
+        style={selectStyle}
+      >
+        {TRANSLATION_MODEL_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+
+      {/* 불러오기 버튼 */}
       <button
         type="button"
         onClick={onLoad}
@@ -149,13 +162,14 @@ function TopBar({
           borderRadius: '8px',
           backgroundColor: '#222',
           color: '#fff',
-          cursor: 'pointer'
+          cursor: 'pointer',
+          fontSize: '13px'
         }}
       >
         불러오기
       </button>
 
-      {/* 채팅 표시/숨김 버튼 */}
+      {/* 채팅 토글 버튼 */}
       <button
         type="button"
         onClick={onToggleChat}
@@ -166,7 +180,8 @@ function TopBar({
           borderRadius: '8px',
           backgroundColor: '#222',
           color: '#fff',
-          cursor: 'pointer'
+          cursor: 'pointer',
+          fontSize: '13px'
         }}
       >
         {isChatVisible ? '채팅 숨기기' : '채팅 보이기'}

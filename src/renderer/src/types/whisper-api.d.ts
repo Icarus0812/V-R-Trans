@@ -1,4 +1,4 @@
-export {}
+import type { ElectronAPI } from '@electron-toolkit/preload'
 
 type WhisperSegment = {
   start: number
@@ -40,6 +40,9 @@ interface WhisperApi {
 
 declare global {
   interface Window {
+    electron: ElectronAPI
     whisperApi: WhisperApi
   }
 }
+
+export {}

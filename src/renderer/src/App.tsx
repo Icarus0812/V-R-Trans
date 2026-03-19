@@ -1,289 +1,225 @@
 import type { JSX } from 'react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
+import TopBar from './components/TopBar'
+import VideoPane from './components/VideoPane'
+import ChatPane from './components/ChatPane'
+import SubtitlePane from './components/SubtitlePane'
+import { extractVideoId } from './utils/youtube'
 import { useSystemAudioCapture } from './hooks/useSystemAudioCapture'
-import type { SubtitleLine } from './types/subtitle'
 
-const WHISPER_MODELS = [
-  'tiny',
-  'base',
-  'small',
-  'medium',
-  'large-v1',
-  'large-v2',
-  'large-v3',
-  'distil-large-v3'
-] as const
+// 다운로드 진행률 상태 타입
+type DownloadStatus = {
+  active: boolean
+  stage: string
+  model: string
+  percent: number
+  desc: string
+} | null
 
 function App(): JSX.Element {
-  const [inputLanguage, setInputLanguage] = useState('auto')
-  const [whisperModel, setWhisperModel] = useState('small')
-  const [captureStatus, setCaptureStatus] = useState('진단 화면 렌더링 완료')
-  const [captureError, setCaptureError] = useState('')
-  const [partialOriginal, setPartialOriginal] = useState('')
-  const [partialTranslated, setPartialTranslated] = useState('')
-  const [lines, setLines] = useState<SubtitleLine[]>([])
+  // 유튜브 URL 입력값
+  const [url, setUrl] = useState('')
 
+  // 실제로 로드된 URL
+  const [loadedUrl, setLoadedUrl] = useState('')
+
+  // 입력 언어
+  const [inputLanguage, setInputLanguage] = useState('auto')
+
+  // 출력 언어
+  const [outputLanguage, setOutputLanguage] = useState('ko')
+
+  // 채팅 표시 여부
+  const [isChatVisible, setIsChatVisible] = useState(true)
+
+  // 상단 바 hover 상태
+  const [isTopbarHovered, setIsTopbarHovered] = useState(false)
+
+  // 현재 전사된 원문
+  const [partialOriginal, setPartialOriginal] = useState('')
+
+  // 한국어 번역 결과
+  const [partialTranslated, setPartialTranslated] = useState('')
+
+  // 선택된 Whisper 모델
+  const [whisperModel, setWhisperModel] = useState('small')
+
+  // 선택된 번역 모델
+  const [translationModel, setTranslationModel] = useState('facebook/nllb-200-distilled-600M')
+
+  // 모델 다운로드 진행률
+  const [downloadStatus, setDownloadStatus] = useState<DownloadStatus>(null)
+
+  // 유튜브 video id 추출
+  const videoId = useMemo(() => extractVideoId(loadedUrl), [loadedUrl])
+
+  // 영상 iframe URL
+  const embedUrl = videoId
+    ? `https://www.youtube.com/embed/${videoId}?playsinline=1&origin=${encodeURIComponent(window.location.origin)}`
+    : ''
+
+  // 채팅 iframe URL
+  const chatUrl = videoId
+    ? `https://www.youtube.com/live_chat?v=${videoId}&embed_domain=${window.location.hostname}`
+    : ''
+
+  // 상단 바 표시 여부
+  const isTopbarOpen = !videoId || isTopbarHovered
+
+  // 다운로드 진행률 구독
+  useEffect((): (() => void) => {
+    const unsubscribe = window.whisperApi.onDownloadProgress((data) => {
+      if (data.type === 'download_progress') {
+        // tqdm 진행률 업데이트
+        setDownloadStatus({
+          active: true,
+          stage: data.stage ?? 'model',
+          model: data.model ?? data.desc ?? '',
+          percent: data.percent ?? 0,
+          desc: data.desc ?? ''
+        })
+      } else if (data.type === 'model_loading') {
+        if (data.status === 'start') {
+          // 모델 로딩 시작
+          setDownloadStatus({
+            active: true,
+            stage: data.stage ?? 'model',
+            model: data.model ?? '',
+            percent: 0,
+            desc: `${data.model ?? ''} 로딩 중...`
+          })
+        } else if (data.status === 'done') {
+          // 완료 후 1.5초 뒤 숨김
+          setTimeout(() => setDownloadStatus(null), 1500)
+        }
+      }
+    })
+    return unsubscribe
+  }, [])
+
+  // 시스템 오디오 캡처 + Whisper 전사
   const { isCapturing, startCapture, stopCapture } = useSystemAudioCapture({
     inputLanguage,
     whisperModel,
-    onStatusChange: (message) => {
-      setCaptureStatus(message)
+    translationModel,
+    onResult: ({ originalText, translatedText }): void => {
+      setPartialOriginal(originalText)
+      setPartialTranslated(translatedText)
     },
-    onError: (message) => {
-      setCaptureError(message)
-      setCaptureStatus('오류 발생')
+    onStatusChange: (msg): void => {
+      console.log('[App] status:', msg)
     },
-    onTranscript: ({ original, translated }) => {
-      const safeOriginal = typeof original === 'string' ? original.trim() : ''
-      const safeTranslated = typeof translated === 'string' ? translated.trim() : ''
-
-      setPartialOriginal(safeOriginal)
-      setPartialTranslated(safeTranslated || safeOriginal)
-
-      setLines((prev) =>
-        [
-          ...prev,
-          {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            createdAt: Date.now(),
-            original: safeOriginal,
-            translated: safeTranslated || safeOriginal
-          }
-        ].slice(-20)
-      )
+    onError: (msg): void => {
+      console.error('[App] error:', msg)
     }
   })
 
-  const handleStart = (): void => {
-    setCaptureError('')
-    setCaptureStatus('진단 시작 버튼 클릭됨')
-    void startCapture()
-  }
-
-  const handleStop = (): void => {
-    stopCapture()
-    setCaptureStatus('진단 정지 버튼 클릭됨')
+  function handleLoad(): void {
+    if (!url.trim()) return
+    setLoadedUrl(url.trim())
+    setIsTopbarHovered(false)
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: '#0f1115',
-        color: '#ffffff',
-        padding: 24,
-        boxSizing: 'border-box'
-      }}
-    >
-      <div
-        style={{
-          background: '#d32f2f',
-          color: '#fff',
-          fontWeight: 800,
-          fontSize: 22,
-          padding: '16px 20px',
-          borderRadius: 12,
-          marginBottom: 20
-        }}
-      >
-        DEBUG APP ACTIVE
-      </div>
+    <div className="app">
+      <div className="topbar-trigger" onMouseEnter={() => setIsTopbarHovered(true)} />
 
       <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 20
-        }}
+        className={`topbar-shell ${isTopbarOpen ? 'open' : 'closed'}`}
+        onMouseEnter={() => setIsTopbarHovered(true)}
+        onMouseLeave={() => setIsTopbarHovered(false)}
       >
-        <section
-          style={{
-            background: '#171a21',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 16,
-            padding: 20
-          }}
-        >
-          <h2 style={{ marginTop: 0, marginBottom: 16 }}>Whisper 진단 패널</h2>
-
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: 'block', marginBottom: 8 }}>입력 언어</label>
-            <select
-              value={inputLanguage}
-              onChange={(event) => setInputLanguage(event.target.value)}
-              disabled={isCapturing}
-              style={{
-                width: '100%',
-                padding: '12px',
-                borderRadius: 10,
-                border: '1px solid rgba(255,255,255,0.15)',
-                background: '#232833',
-                color: '#fff'
-              }}
-            >
-              <option value="auto">auto</option>
-              <option value="ko">ko</option>
-              <option value="en">en</option>
-              <option value="ja">ja</option>
-              <option value="zh">zh</option>
-            </select>
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 8 }}>Whisper 모델</label>
-            <select
-              value={whisperModel}
-              onChange={(event) => setWhisperModel(event.target.value)}
-              disabled={isCapturing}
-              style={{
-                width: '100%',
-                padding: '12px',
-                borderRadius: 10,
-                border: '1px solid rgba(255,255,255,0.15)',
-                background: '#232833',
-                color: '#fff'
-              }}
-            >
-              {WHISPER_MODELS.map((modelName) => (
-                <option key={modelName} value={modelName}>
-                  {modelName}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-            <button
-              type="button"
-              onClick={handleStart}
-              style={{
-                flex: 1,
-                padding: '14px 16px',
-                borderRadius: 10,
-                border: 'none',
-                background: '#2e7d32',
-                color: '#fff',
-                fontWeight: 800,
-                cursor: 'pointer'
-              }}
-            >
-              진단 시작
-            </button>
-
-            <button
-              type="button"
-              onClick={handleStop}
-              style={{
-                flex: 1,
-                padding: '14px 16px',
-                borderRadius: 10,
-                border: 'none',
-                background: '#6d4c41',
-                color: '#fff',
-                fontWeight: 800,
-                cursor: 'pointer'
-              }}
-            >
-              진단 정지
-            </button>
-          </div>
-
-          <div style={{ marginBottom: 8 }}>현재 상태: {isCapturing ? '캡처 중' : '정지'}</div>
-          <div style={{ marginBottom: 8 }}>선택 언어: {inputLanguage}</div>
-          <div style={{ marginBottom: 12 }}>선택 모델: {whisperModel}</div>
-
-          <div
-            style={{
-              minHeight: 80,
-              padding: 12,
-              borderRadius: 10,
-              background: 'rgba(255,255,255,0.06)',
-              color: captureError ? '#ff8a8a' : '#e0e0e0',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word'
-            }}
-          >
-            {captureError || captureStatus}
-          </div>
-        </section>
-
-        <section
-          style={{
-            background: '#171a21',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 16,
-            padding: 20
-          }}
-        >
-          <h2 style={{ marginTop: 0, marginBottom: 16 }}>전사 결과</h2>
-
-          <div style={{ marginBottom: 12, fontSize: 14, opacity: 0.8 }}>원문</div>
-          <div
-            style={{
-              minHeight: 80,
-              padding: 12,
-              borderRadius: 10,
-              background: '#232833',
-              marginBottom: 16,
-              whiteSpace: 'pre-wrap'
-            }}
-          >
-            {partialOriginal || '아직 원문 없음'}
-          </div>
-
-          <div style={{ marginBottom: 12, fontSize: 14, opacity: 0.8 }}>번역</div>
-          <div
-            style={{
-              minHeight: 80,
-              padding: 12,
-              borderRadius: 10,
-              background: '#232833',
-              marginBottom: 16,
-              whiteSpace: 'pre-wrap'
-            }}
-          >
-            {partialTranslated || '아직 번역 없음'}
-          </div>
-
-          <div style={{ marginBottom: 12, fontSize: 14, opacity: 0.8 }}>히스토리</div>
-          <div
-            style={{
-              maxHeight: 320,
-              overflowY: 'auto',
-              display: 'grid',
-              gap: 10
-            }}
-          >
-            {lines.length === 0 ? (
-              <div
-                style={{
-                  padding: 12,
-                  borderRadius: 10,
-                  background: '#232833',
-                  opacity: 0.8
-                }}
-              >
-                아직 히스토리 없음
-              </div>
-            ) : (
-              lines.map((line) => (
-                <div
-                  key={line.id}
-                  style={{
-                    padding: 12,
-                    borderRadius: 10,
-                    background: '#232833'
-                  }}
-                >
-                  <div style={{ marginBottom: 6, opacity: 0.8 }}>{line.original}</div>
-                  <div style={{ fontWeight: 700 }}>{line.translated}</div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
+        <TopBar
+          url={url}
+          inputLanguage={inputLanguage}
+          outputLanguage={outputLanguage}
+          isChatVisible={isChatVisible}
+          whisperModel={whisperModel}
+          translationModel={translationModel}
+          onUrlChange={setUrl}
+          onInputLanguageChange={setInputLanguage}
+          onOutputLanguageChange={setOutputLanguage}
+          onWhisperModelChange={setWhisperModel}
+          onTranslationModelChange={setTranslationModel}
+          onLoad={handleLoad}
+          onToggleChat={() => setIsChatVisible((prev) => !prev)}
+        />
       </div>
+
+      {/* 모델 다운로드 진행률 오버레이 */}
+      {downloadStatus?.active ? (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '80px',
+            right: '20px',
+            zIndex: 9999,
+            backgroundColor: '#1e3a5f',
+            border: '1px solid #2563eb',
+            borderRadius: '14px',
+            padding: '14px 18px',
+            width: '320px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+            boxShadow: '0 4px 24px rgba(0,0,0,0.5)'
+          }}
+        >
+          {/* 헤더 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: '#93c5fd', fontWeight: 700, fontSize: '13px' }}>
+              {downloadStatus.stage === 'whisper' ? '🔊 Whisper 모델' : '🌐 번역 모델'} 다운로드 중
+            </span>
+            <span style={{ color: '#e5e7eb', fontSize: '13px', fontWeight: 700 }}>
+              {downloadStatus.percent.toFixed(1)}%
+            </span>
+          </div>
+
+          {/* 모델명 */}
+          <div style={{ fontSize: '11px', color: '#94a3b8', wordBreak: 'break-all' }}>
+            {downloadStatus.model || downloadStatus.desc}
+          </div>
+
+          {/* 프로그레스 바 */}
+          <div
+            style={{
+              height: '6px',
+              backgroundColor: '#1e293b',
+              borderRadius: '999px',
+              overflow: 'hidden'
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${downloadStatus.percent}%`,
+                backgroundColor: '#2563eb',
+                borderRadius: '999px',
+                transition: 'width 0.3s ease'
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      <main className="workspace">
+        <section className={`content-row ${!isChatVisible ? 'chat-hidden' : ''}`}>
+          <VideoPane videoId={videoId} embedUrl={embedUrl} />
+          {isChatVisible && (
+            <ChatPane videoId={videoId} chatUrl={chatUrl} language={inputLanguage} />
+          )}
+        </section>
+
+        <SubtitlePane
+          lines={[]}
+          partialOriginal={partialOriginal}
+          partialTranslated={partialTranslated}
+          isRunning={isCapturing}
+          onStartDemo={startCapture}
+          onStopDemo={stopCapture}
+        />
+      </main>
     </div>
   )
 }

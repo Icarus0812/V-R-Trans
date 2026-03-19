@@ -58,15 +58,24 @@ function createWindow(): void {
     mainWindow.show()
   })
 
+  // 현재 실제로 어떤 페이지를 불러왔는지 확인용 로그
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('[main] did-finish-load url:', mainWindow.webContents.getURL())
+    console.log('[main] did-finish-load title:', mainWindow.getTitle())
+  })
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    console.log('[main] load renderer url:', process.env['ELECTRON_RENDERER_URL'])
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    const rendererFilePath = join(__dirname, '../renderer/index.html')
+    console.log('[main] load renderer file:', rendererFilePath)
+    mainWindow.loadFile(rendererFilePath)
   }
 }
 
@@ -126,6 +135,7 @@ app.whenReady().then(async () => {
           arrayBuffer: unknown
           inputLanguage?: string
           whisperModel?: string
+          translationModel?: string
         }
       ) => {
         const tempDir = path.join(app.getPath('userData'), 'temp')
@@ -134,10 +144,13 @@ app.whenReady().then(async () => {
           fs.mkdirSync(tempDir, { recursive: true })
         }
 
-        const { arrayBuffer, inputLanguage, whisperModel } = payload
+        const { arrayBuffer, inputLanguage, whisperModel, translationModel } = payload
         const outputLanguage = 'ko'
         const selectedWhisperModel = normalizeWhisperModel(whisperModel)
-
+        const selectedTranslationModel =
+          typeof translationModel === 'string' && translationModel.trim()
+            ? translationModel.trim()
+            : 'facebook/nllb-200-distilled-600M'
         const filePath = path.join(tempDir, `chunk_${Date.now()}.webm`)
 
         try {
@@ -159,7 +172,7 @@ app.whenReady().then(async () => {
           ) {
             audioNodeBuffer = Buffer.from((arrayBuffer as { data: number[] }).data)
           } else {
-            throw new Error('오디오 버퍼 형식을 해석할 수 없습니다.')
+            throw new Error('Cannot parse audio buffer format.')
           }
 
           fs.writeFileSync(filePath, audioNodeBuffer)
@@ -176,7 +189,8 @@ app.whenReady().then(async () => {
             filePath,
             inputLanguage ?? 'auto',
             outputLanguage,
-            selectedWhisperModel
+            selectedWhisperModel,
+            selectedTranslationModel
           )
 
           console.log('[main] whisper response', result)
@@ -204,6 +218,14 @@ app.whenReady().then(async () => {
         }
       }
     )
+
+    // 다운로드 진행률을 renderer 로 전달
+    whisperBridge.onProgress((data) => {
+      const windows = BrowserWindow.getAllWindows()
+      windows.forEach((win) => {
+        win.webContents.send('whisper:download-progress', data)
+      })
+    })
 
     await whisperBridge.start()
     createWindow()

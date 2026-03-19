@@ -21,30 +21,38 @@ type WhisperTranscribeResponse = {
   translation_model?: string
 }
 
+type WhisperTranscribePayload = {
+  arrayBuffer: ArrayBuffer
+  inputLanguage?: string
+  whisperModel?: string
+  translationModel?: string
+}
+
 type WhisperModelOptionsResponse = {
   ok: boolean
   defaultModel?: string
   models?: string[]
+  defaultTranslationModel?: string
+  translationModels?: string[]
   error?: string
 }
 
-interface WhisperApi {
-  /**
-   * 오디오 버퍼 전사 요청
-   * @param arrayBuffer 녹음된 오디오 데이터
-   * @param inputLanguage 입력 언어
-   * @param whisperModel 사용할 Whisper 모델
-   */
-  transcribeBuffer: (
-    arrayBuffer: ArrayBuffer,
-    inputLanguage: string,
-    whisperModel?: string
-  ) => Promise<WhisperTranscribeResponse>
+type DownloadProgressData = {
+  type: string
+  desc?: string
+  n?: number
+  total?: number
+  percent?: number
+  stage?: string
+  model?: string
+  status?: string
+}
 
-  /**
-   * 선택 가능한 Whisper 모델 목록 조회
-   */
+interface WhisperApi {
   getModelOptions: () => Promise<WhisperModelOptionsResponse>
+  transcribeBuffer: (payload: WhisperTranscribePayload) => Promise<WhisperTranscribeResponse>
+  // 다운로드 진행률 구독, 반환값은 구독 해제 함수
+  onDownloadProgress: (callback: (data: DownloadProgressData) => void) => () => void
 }
 
 declare global {

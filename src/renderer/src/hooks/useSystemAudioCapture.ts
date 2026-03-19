@@ -1,16 +1,48 @@
 import { useRef, useState } from 'react'
 
-type TranscriptPayload = {
-  original: string
-  translated: string
+type WhisperSegment = {
+  start: number
+  end: number
+  text: string
+}
+
+type WhisperTranscribeResponse = {
+  ok?: boolean
+  error?: string
+  text?: string
+  full_text?: string
+  english_pivot_text?: string
+  segments?: WhisperSegment[]
+  translated_segments?: WhisperSegment[]
+  detected_language?: string
+  language_probability?: number
+  whisper_model?: string
+  translation_model?: string
+}
+
+type CaptureResult = {
+  originalText: string
+  translatedText: string
+  response: WhisperTranscribeResponse
 }
 
 interface UseSystemAudioCaptureOptions {
-  onTranscript?: (payload: TranscriptPayload) => void
+  // Whisper 입력 언어
   inputLanguage?: string
+
+  // 사용할 Whisper 모델
   whisperModel?: string
-  chunkDurationMs?: number
+
+  // 사용할 번역 모델
+  translationModel?: string
+
+  // 전사/번역 결과 수신 콜백
+  onResult?: (result: CaptureResult) => void
+
+  // 상태 메시지 변경 콜백
   onStatusChange?: (message: string) => void
+
+  // 에러 콜백
   onError?: (message: string) => void
 }
 
@@ -20,73 +52,66 @@ interface UseSystemAudioCaptureReturn {
   stopCapture: () => void
 }
 
-type WhisperIpcResult = {
-  ok?: boolean
-  error?: string
-  text?: string
-  full_text?: string
-  detected_language?: string
-  whisper_model?: string
+function normalizeText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
-type RendererWhisperApi = {
-  transcribeBuffer: (
-    arrayBuffer: ArrayBuffer,
-    inputLanguage: string,
-    whisperModel?: string
-  ) => Promise<WhisperIpcResult>
+function joinSegments(segments?: WhisperSegment[]): string {
+  if (!Array.isArray(segments) || segments.length === 0) return ''
+  return segments
+    .map((s) => normalizeText(s.text))
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function extractOriginalText(result: WhisperTranscribeResponse): string {
+  return (
+    normalizeText(result.full_text) ||
+    joinSegments(result.segments) ||
+    normalizeText(result.text) ||
+    normalizeText(result.english_pivot_text)
+  )
+}
+
+function extractTranslatedText(result: WhisperTranscribeResponse): string {
+  return joinSegments(result.translated_segments)
 }
 
 export function useSystemAudioCapture(
   options?: UseSystemAudioCaptureOptions
 ): UseSystemAudioCaptureReturn {
-  const whisperApi = (window as unknown as { whisperApi?: RendererWhisperApi }).whisperApi
-
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const captureStreamRef = useRef<MediaStream | null>(null)
   const recordStreamRef = useRef<MediaStream | null>(null)
   const restartTimerRef = useRef<number | null>(null)
-
-  const [isCapturing, setIsCapturing] = useState(false)
   const isCapturingRef = useRef(false)
 
-  const notifyStatus = (message: string): void => {
-    console.log('[capture status]', message)
-    options?.onStatusChange?.(message)
-  }
+  const [isCapturing, setIsCapturing] = useState(false)
 
-  const notifyError = (message: string): void => {
-    console.error('[capture error]', message)
-    options?.onError?.(message)
-  }
-
-  const getSupportedMimeType = (): string | undefined => {
+  function getSupportedMimeType(): string | undefined {
     const candidates = ['audio/webm;codecs=opus', 'audio/webm']
-    return candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType))
+    return candidates.find((t) => MediaRecorder.isTypeSupported(t))
   }
 
-  const clearRestartTimer = (): void => {
+  function clearRestartTimer(): void {
     if (restartTimerRef.current !== null) {
       window.clearTimeout(restartTimerRef.current)
       restartTimerRef.current = null
     }
   }
 
-  const getNormalizedInputLanguage = (): string => {
-    const value = options?.inputLanguage?.trim()
-    return value && value.length > 0 ? value : 'auto'
+  function cleanupStreams(): void {
+    captureStreamRef.current?.getTracks().forEach((t) => t.stop())
+    recordStreamRef.current?.getTracks().forEach((t) => t.stop())
+    captureStreamRef.current = null
+    recordStreamRef.current = null
   }
 
-  const getNormalizedWhisperModel = (): string | undefined => {
-    const value = options?.whisperModel?.trim()
-    return value && value.length > 0 ? value : undefined
-  }
-
-  const startRecordingCycle = (): void => {
+  function startRecordingCycle(): void {
     const recordStream = recordStreamRef.current
-
-    if (!recordStream) return
-    if (!isCapturingRef.current) return
+    if (!recordStream || !isCapturingRef.current) return
 
     const mimeType = getSupportedMimeType()
     const mediaRecorder = mimeType
@@ -94,7 +119,6 @@ export function useSystemAudioCapture(
       : new MediaRecorder(recordStream)
 
     mediaRecorderRef.current = mediaRecorder
-
     const chunks: Blob[] = []
 
     mediaRecorder.ondataavailable = (event: BlobEvent): void => {
@@ -103,91 +127,86 @@ export function useSystemAudioCapture(
     }
 
     mediaRecorder.onerror = (): void => {
-      notifyError('MediaRecorder 오류가 발생했습니다.')
+      console.error('[useSystemAudioCapture] mediaRecorder error')
+      options?.onError?.('녹음 중 오류가 발생했습니다.')
     }
 
     mediaRecorder.onstop = async (): Promise<void> => {
       try {
-        const completeBlob = new Blob(chunks, {
-          type: mimeType ?? 'audio/webm'
+        const completeBlob = new Blob(chunks, { type: mimeType ?? 'audio/webm' })
+        if (completeBlob.size <= 0) return
+
+        const arrayBuffer = await completeBlob.arrayBuffer()
+        options?.onStatusChange?.('전사 요청 중...')
+
+        // ✅ 핵심 수정: payload 객체로 감싸서 전달
+        const result = await window.whisperApi.transcribeBuffer({
+          arrayBuffer,
+          inputLanguage: options?.inputLanguage ?? 'auto',
+          whisperModel: options?.whisperModel,
+          translationModel: options?.translationModel
         })
 
-        if (completeBlob.size > 0) {
-          const arrayBuffer = await completeBlob.arrayBuffer()
-          const inputLanguage = getNormalizedInputLanguage()
-          const whisperModel = getNormalizedWhisperModel()
-
-          if (!whisperApi || typeof whisperApi.transcribeBuffer !== 'function') {
-            notifyError('preload의 whisperApi가 연결되지 않았습니다.')
+        if (!result.ok) {
+          if (result.error?.includes('starting but not ready yet')) {
+            options?.onStatusChange?.('worker 준비 중...')
             return
           }
-
-          notifyStatus('Whisper 전사 요청 중...')
-
-          const result = await whisperApi.transcribeBuffer(
-            arrayBuffer,
-            inputLanguage,
-            whisperModel
-          )
-
-          if (!result.ok && result.error?.includes('starting but not ready yet')) {
-            notifyStatus('Whisper worker 준비 중이라 이번 청크는 건너뜀')
-          } else if (result.ok) {
-            const original = typeof result.full_text === 'string' ? result.full_text.trim() : ''
-            const translated = typeof result.text === 'string' ? result.text.trim() : ''
-
-            if (original || translated) {
-              notifyStatus('전사 결과 수신 완료')
-            }
-
-            options?.onTranscript?.({
-              original,
-              translated
-            })
-          } else {
-            notifyError(result.error ?? 'Whisper 전사 실패')
-          }
+          const errorMessage = result.error || '전사 실패'
+          console.error('[useSystemAudioCapture] transcription failed:', errorMessage)
+          options?.onError?.(errorMessage)
+          options?.onStatusChange?.(`오류: ${errorMessage}`)
+          return
         }
+
+        const originalText = extractOriginalText(result)
+        const translatedText = extractTranslatedText(result)
+
+        options?.onResult?.({ originalText, translatedText, response: result })
+        options?.onStatusChange?.('실시간 캡처 중')
       } catch (error) {
-        notifyError(error instanceof Error ? error.message : 'onstop transcription error')
+        console.error('[useSystemAudioCapture] onstop error:', error)
+        options?.onError?.(
+          error instanceof Error ? error.message : '전사 처리 중 오류가 발생했습니다.'
+        )
       } finally {
         mediaRecorderRef.current = null
-
-        if (isCapturingRef.current) {
+        clearRestartTimer()
+        if (isCapturingRef.current && recordStreamRef.current) {
           startRecordingCycle()
         }
       }
     }
 
     mediaRecorder.start()
+    clearRestartTimer()
 
+    // 2초마다 청크 잘라서 worker로 전달
     restartTimerRef.current = window.setTimeout(() => {
       if (mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop()
       }
-    }, options?.chunkDurationMs ?? 2000)
+    }, 2000)
   }
 
-  const startCapture = async (): Promise<void> => {
+  async function startCapture(): Promise<void> {
     try {
+      if (!window.whisperApi) {
+        throw new Error('preload whisperApi가 연결되지 않았습니다.')
+      }
       if (mediaRecorderRef.current || isCapturingRef.current) return
 
-      if (!navigator.mediaDevices?.getDisplayMedia) {
-        throw new Error('현재 환경에서 getDisplayMedia를 사용할 수 없습니다.')
-      }
-
-      notifyStatus('화면/시스템 오디오 캡처 요청 중...')
+      options?.onStatusChange?.('시스템 오디오 캡처 요청 중...')
 
       const captureStream = await navigator.mediaDevices.getDisplayMedia({
         video: true,
         audio: true
       })
-
       captureStreamRef.current = captureStream
 
       const audioTracks = captureStream.getAudioTracks()
-
       if (audioTracks.length === 0) {
+        cleanupStreams()
         throw new Error('오디오 트랙을 찾지 못했습니다. 시스템 오디오 공유를 켰는지 확인하세요.')
       }
 
@@ -196,54 +215,32 @@ export function useSystemAudioCapture(
 
       isCapturingRef.current = true
       setIsCapturing(true)
-
-      notifyStatus(
-        `캡처 시작됨 | inputLanguage=${getNormalizedInputLanguage()} | whisperModel=${getNormalizedWhisperModel() ?? 'default'}`
-      )
-
+      options?.onStatusChange?.('실시간 캡처 중')
       startRecordingCycle()
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'startCapture 실행 중 알 수 없는 오류'
-
-      notifyError(message)
-
+      console.error('[useSystemAudioCapture] startCapture error:', error)
       isCapturingRef.current = false
       setIsCapturing(false)
-
-      captureStreamRef.current?.getTracks().forEach((track) => track.stop())
-      recordStreamRef.current?.getTracks().forEach((track) => track.stop())
-
-      captureStreamRef.current = null
-      recordStreamRef.current = null
-      mediaRecorderRef.current = null
+      clearRestartTimer()
+      cleanupStreams()
+      const message = error instanceof Error ? error.message : '시스템 오디오 캡처 시작 실패'
+      options?.onError?.(message)
+      throw error
     }
   }
 
-  const stopCapture = (): void => {
+  function stopCapture(): void {
     isCapturingRef.current = false
     setIsCapturing(false)
-
     clearRestartTimer()
-
     const recorder = mediaRecorderRef.current
     if (recorder && recorder.state !== 'inactive') {
       recorder.stop()
     }
-
-    captureStreamRef.current?.getTracks().forEach((track) => track.stop())
-    recordStreamRef.current?.getTracks().forEach((track) => track.stop())
-
-    captureStreamRef.current = null
-    recordStreamRef.current = null
+    cleanupStreams()
     mediaRecorderRef.current = null
-
-    notifyStatus('캡처 중지')
+    options?.onStatusChange?.('중지됨')
   }
 
-  return {
-    isCapturing,
-    startCapture,
-    stopCapture
-  }
+  return { isCapturing, startCapture, stopCapture }
 }

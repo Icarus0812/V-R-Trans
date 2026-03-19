@@ -28,12 +28,28 @@ type WhisperResponse = {
   available_whisper_models?: string[]
   translation_model?: string
   pong?: boolean
+  // 다운로드 진행률 필드
+  stage?: string
+  status?: string
+  percent?: number
+  desc?: string
 }
 
 type PendingResolver = {
   resolve: (value: WhisperResponse) => void
   reject: (reason?: unknown) => void
 }
+
+type DownloadProgressCallback = (data: {
+  type: string
+  desc?: string
+  n?: number
+  total?: number
+  percent?: number
+  stage?: string
+  model?: string
+  status?: string
+}) => void
 
 class WhisperBridge {
   private proc: ChildProcessWithoutNullStreams | null = null
@@ -42,6 +58,16 @@ class WhisperBridge {
   private requestSeq = 0
   private startPromise: Promise<void> | null = null
   private stderrBuffer = ''
+  // 다운로드 진행률 콜백 등록
+  private progressCallbacks: DownloadProgressCallback[] = []
+
+  onProgress(callback: DownloadProgressCallback): void {
+    this.progressCallbacks.push(callback)
+  }
+
+  private emitProgress(data: Parameters<DownloadProgressCallback>[0]): void {
+    this.progressCallbacks.forEach((cb) => cb(data))
+  }
 
   private resolveWorkerPath(): string {
     const candidatePaths = [
@@ -110,6 +136,31 @@ class WhisperBridge {
           console.log('[whisper stdout]', line)
 
           const message = JSON.parse(line) as WhisperResponse
+
+          // 다운로드 진행률 / 모델 로딩 메시지 처리
+          if (message.type === 'download_progress' || message.type === 'model_loading') {
+            // Python worker 에서 오는 진행률/로딩 메시지를 그대로 전달
+            this.emitProgress({
+              type: message.type,
+              desc: typeof message.model === 'string' ? message.model : undefined,
+              n: undefined,
+              total: undefined,
+              percent:
+                typeof (message as Record<string, unknown>).percent === 'number'
+                  ? ((message as Record<string, unknown>).percent as number)
+                  : undefined,
+              stage:
+                typeof (message as Record<string, unknown>).stage === 'string'
+                  ? ((message as Record<string, unknown>).stage as string)
+                  : undefined,
+              model: typeof message.model === 'string' ? message.model : undefined,
+              status:
+                typeof (message as Record<string, unknown>).status === 'string'
+                  ? ((message as Record<string, unknown>).status as string)
+                  : undefined
+            })
+            return
+          }
 
           if (message.type === 'ready') {
             this.ready = true
@@ -194,7 +245,8 @@ class WhisperBridge {
     audioPath: string,
     inputLanguage?: string,
     outputLanguage: string = 'source',
-    whisperModel?: string
+    whisperModel?: string,
+    translationModel?: string
   ): Promise<WhisperResponse> {
     await this.start()
 
@@ -212,13 +264,18 @@ class WhisperBridge {
     const normalizedWhisperModel =
       whisperModel && whisperModel.trim() !== '' ? whisperModel.trim() : undefined
 
+    // 번역 모델 정규화
+    const normalizedTranslationModel =
+      translationModel && translationModel.trim() !== '' ? translationModel.trim() : undefined
+
     const payload = {
       id,
       command: 'transcribe',
       audio_path: audioPath,
       input_language: normalizedLanguage,
       output_language: normalizedOutputLanguage,
-      whisper_model: normalizedWhisperModel
+      whisper_model: normalizedWhisperModel,
+      translation_model: normalizedTranslationModel
     }
 
     const promise = new Promise<WhisperResponse>((resolve, reject) => {

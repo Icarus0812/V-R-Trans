@@ -21,9 +21,7 @@ function SubtitlePane({
   return (
     <section className="subtitle-pane">
       <div className="subtitle-toolbar">
-        <div className="subtitle-status">
-          {isRunning ? '실시간 테스트 중' : '대기 중'}
-        </div>
+        <div className="subtitle-status">{isRunning ? '실시간 테스트 중' : '대기 중'}</div>
 
         <div className="subtitle-actions">
           <button className="subtitle-btn" onClick={onStartDemo} disabled={isRunning}>
@@ -36,13 +34,8 @@ function SubtitlePane({
       </div>
 
       <div className="subtitle-live">
-        <div className="subtitle-live-original">
-          {partialOriginal || '원문 인식 대기 중'}
-        </div>
-        <div className="subtitle-live-translated">
-          {partialTranslated || '번역 자막 대기 중'}
-
-        </div>
+        <div className="subtitle-live-original">{partialOriginal || '원문 인식 대기 중'}</div>
+        <div className="subtitle-live-translated">{partialTranslated || '번역 자막 대기 중'}</div>
       </div>
 
       <div className="subtitle-history">

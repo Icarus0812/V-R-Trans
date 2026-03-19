@@ -1,48 +1,37 @@
-import { ElectronAPI } from '@electron-toolkit/preload'
+import { contextBridge, ipcRenderer } from 'electron'
 
-type WhisperSegment = {
-  start: number
-  end: number
-  text: string
-}
+contextBridge.exposeInMainWorld('whisperApi', {
+  // Whisper + 번역 모델 목록 조회
+  getModelOptions: () => ipcRenderer.invoke('whisper:get-model-options'),
 
-type WhisperTranscribeResponse = {
-  ok?: boolean
-  error?: string
-  text?: string
-  full_text?: string
-  english_pivot_text?: string
-  segments?: WhisperSegment[]
-  translated_segments?: WhisperSegment[]
-  detected_language?: string
-  language_probability?: number
-  whisper_model?: string
-  available_whisper_models?: string[]
-  translation_model?: string
-}
-
-type WhisperModelOptionsResponse = {
-  ok: boolean
-  defaultModel?: string
-  models?: string[]
-  error?: string
-}
-
-interface WhisperApi {
-  transcribeBuffer: (
-    arrayBuffer: ArrayBuffer,
-    inputLanguage: string,
+  // 오디오 버퍼 전사 요청
+  transcribeBuffer: (payload: {
+    arrayBuffer: ArrayBuffer
+    inputLanguage?: string
     whisperModel?: string
-  ) => Promise<WhisperTranscribeResponse>
+    translationModel?: string
+  }) => ipcRenderer.invoke('whisper:transcribe-buffer', payload),
 
-  getModelOptions: () => Promise<WhisperModelOptionsResponse>
-}
-
-declare global {
-  interface Window {
-    electron: ElectronAPI
-    whisperApi: WhisperApi
+  // 다운로드 진행률 구독 (cleanup 함수 반환)
+  onDownloadProgress: (
+    callback: (data: {
+      type: string
+      desc?: string
+      n?: number
+      total?: number
+      percent?: number
+      stage?: string
+      model?: string
+      status?: string
+    }) => void
+  ): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, data: unknown): void => {
+      callback(data as Parameters<typeof callback>[0])
+    }
+    ipcRenderer.on('whisper:download-progress', handler)
+    // 구독 해제 함수 반환
+    return (): void => {
+      ipcRenderer.removeListener('whisper:download-progress', handler)
+    }
   }
-}
-
-export {}
+})
